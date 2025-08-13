@@ -71,7 +71,7 @@
     position:absolute; right:10px; top:10px; font-size:12px; color:var(--muted); 
     background:var(--badge-bg); padding:3px 8px; border-radius:999px;
   }
-  .node{margin-bottom:14px}
+  .node{margin-bottom:14px; scroll-margin-top:70px}
   .node .title[contenteditable],
   .node .content[contenteditable],
   .note-item [contenteditable],
@@ -91,7 +91,7 @@
   }
   .tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:6px}
   .controls{display:flex; gap:8px; flex-wrap:wrap; margin:8px 0}
-  .node-ops{display:flex; gap:8px; align-items:center}
+  .node-ops{display:flex; gap:8px; align-items:center; margin:8px 0}
   .node-ops .icon-btn{
     width:28px; height:28px; border-radius:999px; border:1px solid var(--line); 
     display:inline-grid; place-items:center; cursor:pointer; background:var(--paper)
@@ -177,7 +177,7 @@
 <body data-theme="light">
 <header>
   <div class="hdr">
-    <div class="brand"><span class="sun">☀️</span> <span>RL Заметки</span></div>
+    <a href="/" class="brand"><span class="sun">☀️</span> <span>RL Заметки</span></a>
     <div class="search">
       <span>🔎</span>
       <input id="searchInput" placeholder='Поиск... (поддержка: tag:, type:, level:, status:, AND/OR/NOT, "точная фраза")  ⌘/Ctrl+K' />
@@ -234,6 +234,8 @@
       <button class="btn warn" id="bulkTrashBtn">🗑️ В корзину</button>
       <button class="btn danger" id="bulkDeleteBtn">❌ Удалить навсегда</button>
       <button class="btn" id="bulkExportBtn">📤 Экспорт</button>
+      <button class="btn" id="applyEditBtn">✔️ Применить</button>
+      <button class="btn" id="cancelEditBtn">↩️ Отмена</button>
       <span class="right muted">Режим «Изменить»</span>
     </div>
     <div id="tree"></div>
@@ -253,8 +255,7 @@
   <button class="tb-btn" data-cmd="insertUnorderedList">• Список</button>
   <button class="tb-btn" data-cmd="insertOrderedList">1. Список</button>
   <button class="tb-btn" id="chkListBtn">☑️ Чеклист</button>
-  <button class="tb-btn" id="quoteBtn">❝ Цитата</button>
-  <button class="tb-btn" id="codeBtn"></> Код</button>
+  <button class="tb-btn" data-cmd="justifyCenter">↔️ Центр</button>
   <button class="tb-btn" id="linkBtn">🔗 Ссылка</button>
   <input type="color" id="colorPick" class="tb-btn" title="Цвет текста" />
   <select id="fontSizeSel" class="tb-btn" title="Размер">
@@ -371,6 +372,8 @@ let ui = {
   searchResults:[],
   activeDirHandle:null // для File System Access (опционально)
 };
+
+let editSnapshot = null;
 
 // ======= IndexedDB для бэкапов (200) =======
 const DB_NAME='rl_notes_db'; const STORE='backups';
@@ -506,7 +509,7 @@ function renderNode(node){
   // Верхняя строка: чекбокс/ручка/иконки/статусы
   const ops = document.createElement('div');
   ops.className='node-ops';
-  ops.style.position='absolute'; ops.style.top='8px'; ops.style.left='8px'; ops.style.gap='6px';
+  ops.style.gap='6px';
 
   const sel = document.createElement('input');
   sel.type='checkbox'; sel.className='checkbox'; sel.style.display = ui.editMode?'block':'none';
@@ -524,6 +527,7 @@ function renderNode(node){
     });
     el.addEventListener('dragover', ev=>{
       ev.preventDefault();
+      ev.dataTransfer.dropEffect='move';
       const fromId = ev.dataTransfer.getData('text/plain');
       if(!fromId || fromId===node.id) return;
     });
@@ -560,7 +564,6 @@ function renderNode(node){
   if(node.status==='active'){ ops.appendChild(archiveBtn); ops.appendChild(trashBtn) }
   if(node.status==='archived'){ ops.appendChild(restoreBtn); ops.appendChild(trashBtn) }
   if(node.status==='trashed'){ ops.appendChild(restoreBtn); ops.appendChild(delBtn) }
-  el.appendChild(ops);
 
   // Шапка узла
   const hdr = document.createElement('div'); hdr.className='node-hdr';
@@ -588,11 +591,14 @@ function renderNode(node){
   for(const t of node.types||[]){
     const chip = document.createElement('span'); chip.className='chip';
     chip.textContent = `${typeEmoji(t)} ${typeLabel(t)}`;
+    chip.style.pointerEvents='none';
     typesRow.appendChild(chip);
   }
   hdr.appendChild(typesRow);
 
   el.appendChild(hdr);
+  if(node.collapsed){ return el; }
+  el.appendChild(ops);
 
   // Только H1: примечание к разделу
   if(node.level===1){
@@ -725,7 +731,7 @@ function renderNode(node){
   // Теги
   if((node.tags||[]).length){
     const tagsDiv=document.createElement('div'); tagsDiv.className='tags';
-    for(const t of node.tags){
+    for(const t of new Set(node.tags)){
       const tag=state.tagsCatalog.find(x=>x.id===t); if(!tag) continue;
       const chip=document.createElement('span'); chip.className='chip'; chip.style.background=tag.color+'22'; chip.style.color=tag.color;
       chip.textContent='🏷️ '+tag.name; tagsDiv.appendChild(chip);
@@ -1115,14 +1121,14 @@ toolbar.addEventListener('click', (e)=>{
 $('#linkBtn').onclick=()=>{
   const url=prompt('Ссылка:','https://'); if(url) document.execCommand('createLink', false, url);
 };
-$('#codeBtn').onclick=()=>document.execCommand('formatBlock', false, 'pre');
-$('#quoteBtn').onclick=()=>document.execCommand('formatBlock', false, 'blockquote');
 $('#chkListBtn').onclick=()=>{
   // простой чеклист — вставляем UL с чекбоксами
   document.execCommand('insertUnorderedList', false, null);
 };
 $('#colorPick').oninput=(e)=>document.execCommand('foreColor', false, e.target.value);
 $('#fontSizeSel').onchange=(e)=>{ const v=e.target.value; if(v!=='0') document.execCommand('fontSize', false, v) };
+document.addEventListener('mouseup', showToolbar);
+document.addEventListener('keyup', showToolbar);
 
 // ======= Экспорт =======
 $('#exportBtn').onclick=()=>showModal('exportModal');
@@ -1455,7 +1461,17 @@ function updateSelbar(){
   $('#selCount').textContent = ui.selection.size;
 }
 $('#editToggle').onclick=()=>{
-  ui.editMode=!ui.editMode; if(!ui.editMode) ui.selection.clear();
+  if(!ui.editMode){ editSnapshot = JSON.stringify(state); }
+  ui.editMode=!ui.editMode; if(!ui.editMode){ ui.selection.clear(); editSnapshot=null; }
+  updateSelbar(); render();
+};
+$('#applyEditBtn').onclick=()=>{
+  ui.editMode=false; ui.selection.clear(); editSnapshot=null;
+  updateSelbar(); save(true); render();
+};
+$('#cancelEditBtn').onclick=()=>{
+  if(editSnapshot){ state = JSON.parse(editSnapshot); }
+  ui.editMode=false; ui.selection.clear(); editSnapshot=null;
   updateSelbar(); render();
 };
 $('#bulkTagBtn').onclick=()=>openTagsPicker([...ui.selection]);
@@ -1797,7 +1813,7 @@ renderNode = function(node){
     blocks.forEach((blk, idx)=>{
       blk.setAttribute('draggable','true'); blk.style.cursor='grab';
       blk.addEventListener('dragstart', ev=>{ ev.dataTransfer.setData('text/rl-kind','table'); ev.dataTransfer.setData('text/idx', idx) });
-      blk.addEventListener('dragover', ev=>{ ev.preventDefault() });
+      blk.addEventListener('dragover', ev=>{ ev.preventDefault(); ev.dataTransfer.dropEffect='move'; });
       blk.addEventListener('drop', ev=>{
         ev.preventDefault();
         if(ev.dataTransfer.getData('text/rl-kind')!=='table') return;
@@ -1817,7 +1833,7 @@ renderNode = function(node){
       rows.forEach((r, idx)=>{
         r.setAttribute('draggable','true'); r.style.cursor='grab';
         r.addEventListener('dragstart', ev=>{ ev.dataTransfer.setData('text/rl-kind','attach'); ev.dataTransfer.setData('text/idx', idx) });
-        r.addEventListener('dragover', ev=>{ ev.preventDefault() });
+        r.addEventListener('dragover', ev=>{ ev.preventDefault(); ev.dataTransfer.dropEffect='move'; });
         r.addEventListener('drop', ev=>{
           ev.preventDefault();
           if(ev.dataTransfer.getData('text/rl-kind')!=='attach') return;
@@ -1836,7 +1852,7 @@ renderNode = function(node){
       rows.forEach((r, idx)=>{
         r.setAttribute('draggable','true'); r.style.cursor='grab';
         r.addEventListener('dragstart', ev=>{ ev.dataTransfer.setData('text/rl-kind','note'); ev.dataTransfer.setData('text/idx', idx) });
-        r.addEventListener('dragover', ev=>{ ev.preventDefault() });
+        r.addEventListener('dragover', ev=>{ ev.preventDefault(); ev.dataTransfer.dropEffect='move'; });
         r.addEventListener('drop', ev=>{
           ev.preventDefault();
           if(ev.dataTransfer.getData('text/rl-kind')!=='note') return;
@@ -1953,6 +1969,7 @@ async function saveToDirectory(){
 // ======= Инициализация =======
 function init(){
   load();
+  for(const n of state.nodes){ n.collapsed = true; }
   // если нет PIN — предложим установить
   if(!hasPin()) showLock(true);
   $('#lastSave').textContent = new Date(state.lastSave).toLocaleString();
